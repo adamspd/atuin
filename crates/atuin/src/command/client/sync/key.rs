@@ -7,7 +7,7 @@ use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
 use atuin_client::{
-    encryption::{encode_key, generate_encoded_key, load_key},
+    encryption::{decode_key, encode_key, generate_encoded_key, load_key},
     record::sqlite_store::SqliteStore,
     record::store::Store,
     settings::Settings,
@@ -26,6 +26,10 @@ pub enum Cmd {
     /// Rotate the encryption key — generates a new key, re-encrypts all local
     /// records, and optionally force-pushes to the remote sync server
     Rotate(RotateCmd),
+
+    /// Re-encrypt the local store with an EXISTING key (provided via --key).
+    /// Used on secondary devices after the primary has rotated the key.
+    ReEncrypt(ReEncryptCmd),
 }
 
 impl Default for Cmd {
@@ -39,6 +43,7 @@ impl Cmd {
         match self {
             Self::Show { base64 } => show(settings, base64),
             Self::Rotate(rotate) => rotate.run(settings, store).await,
+            Self::ReEncrypt(re_encrypt) => re_encrypt.run(settings, store).await,
         }
     }
 }
@@ -155,36 +160,12 @@ impl RotateCmd {
         // 7. Optionally force-push to remote
         #[cfg(feature = "sync")]
         if self.push {
-            self.force_push(settings, &store).await?;
+            force_push_to_remote(settings, &store).await?;
         }
 
-        // 8. Save old key as key.rotated (fallback for other machines not yet migrated)
-        let old_key_encoded =
-            encode_key(&load_key(settings).wrap_err("could not reload current key for backup")?)
-                .wrap_err("could not encode old key")?;
-
-        let rotated_key_path = PathBuf::from(settings.key_path.as_str())
-            .parent()
-            .expect("key_path must have a parent directory")
-            .join("key.rotated");
-
-        println!(
-            "Saving old key as fallback to {}",
-            rotated_key_path.display()
-        );
-        std::fs::write(&rotated_key_path, old_key_encoded.as_bytes())
-            .wrap_err("failed to write key.rotated fallback file")?;
-
-        // 9. Write the new key to disk
-        let key_path = PathBuf::from(settings.key_path.as_str());
-        println!("Saving new key to {}", key_path.display());
-        let mut file = File::create(&key_path)
-            .await
-            .wrap_err("failed to create key file")?;
-        file.write_all(new_key_encoded.as_bytes())
-            .await
-            .wrap_err("failed to write key file")?;
-        file.flush().await?;
+        // 8. Save old key as key.rotated, write new key to disk
+        save_old_key_as_rotated(settings).wrap_err("failed to save old key as key.rotated")?;
+        write_key_to_disk(settings, &new_key_encoded).await?;
 
         // 9. Print the new key
         let mnemonic = bip39::Mnemonic::from_entropy(&new_key, bip39::Language::English)
@@ -223,6 +204,7 @@ impl RotateCmd {
     /// Aborts if the count mismatch after sync exceeds the tolerance threshold,
     /// which accounts for commands recorded locally but not yet synced.
     #[cfg(feature = "sync")]
+    #[allow(clippy::unused_self)]
     async fn sync_pull(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         use atuin_client::record::sync::{self, Operation};
 
@@ -308,45 +290,210 @@ impl RotateCmd {
         );
         Ok(())
     }
+}
 
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+/// Save the current key as `key.rotated` alongside the `key` file.
+fn save_old_key_as_rotated(settings: &Settings) -> Result<()> {
+    let old_key_encoded =
+        encode_key(&load_key(settings).wrap_err("could not reload current key for backup")?)
+            .wrap_err("could not encode old key")?;
+
+    let rotated_key_path = PathBuf::from(settings.key_path.as_str())
+        .parent()
+        .expect("key_path must have a parent directory")
+        .join("key.rotated");
+
+    println!(
+        "Saving old key as fallback to {}",
+        rotated_key_path.display()
+    );
+    std::fs::write(&rotated_key_path, old_key_encoded.as_bytes())
+        .wrap_err("failed to write key.rotated fallback file")?;
+
+    Ok(())
+}
+
+/// Write a base64-encoded key to the configured `key_path`.
+async fn write_key_to_disk(settings: &Settings, encoded_key: &str) -> Result<()> {
+    let key_path = PathBuf::from(settings.key_path.as_str());
+    println!("Saving new key to {}", key_path.display());
+    let mut file = File::create(&key_path)
+        .await
+        .wrap_err("failed to create key file")?;
+    file.write_all(encoded_key.as_bytes())
+        .await
+        .wrap_err("failed to write key file")?;
+    file.flush().await?;
+    Ok(())
+}
+
+/// Force-push the entire local store to the remote server (clears remote first).
+#[cfg(feature = "sync")]
+async fn force_push_to_remote(settings: &Settings, store: &SqliteStore) -> Result<()> {
+    use atuin_client::{
+        api_client::Client,
+        record::sync::{self, Operation},
+    };
+
+    println!("\nForce-pushing re-encrypted store to remote server...");
+
+    let client = Client::new(
+        &settings.sync_address,
+        settings.session_token().await?.as_str(),
+        settings.network_connect_timeout,
+        settings.network_timeout * 10,
+    )
+    .expect("failed to create client");
+
+    // Clear the remote store first
+    println!("Clearing remote store...");
+    client
+        .delete_store()
+        .await
+        .wrap_err("failed to clear remote store")?;
+
+    // Diff and upload everything
+    let (diff, _) = sync::diff(settings, store).await?;
+    let operations = sync::operations(diff, store).await?;
+
+    let upload_ops: Vec<Operation> = operations
+        .into_iter()
+        .filter(|op| matches!(op, Operation::Upload { .. }))
+        .collect();
+
+    if upload_ops.is_empty() {
+        println!("No records to upload");
+    } else {
+        let (uploaded, _) = sync::sync_remote(upload_ops, store, settings, 100).await?;
+        println!("Uploaded {uploaded} records to remote server");
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// ReEncrypt subcommand
+// ---------------------------------------------------------------------------
+
+#[derive(Args, Debug)]
+pub struct ReEncryptCmd {
+    /// The new key to re-encrypt to (base64 format, as printed by
+    /// `atuin key show --base64` or `atuin key rotate`)
+    #[arg(long)]
+    pub key: String,
+
+    /// Validate that the local store decrypts and the provided key is valid,
+    /// but write nothing
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Skip the interactive confirmation prompt
+    #[arg(long)]
+    pub force: bool,
+
+    /// After re-encrypting locally, force-push the store to the remote server
     #[cfg(feature = "sync")]
-    async fn force_push(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        use atuin_client::{
-            api_client::Client,
-            record::sync::{self, Operation},
-        };
+    #[arg(long, default_value = "false")]
+    pub push: bool,
+}
 
-        println!("\nForce-pushing re-encrypted store to remote server...");
+impl ReEncryptCmd {
+    pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
+        // 1. Load the current (old) key from disk
+        let current_key: [u8; 32] = load_key(settings)
+            .wrap_err("could not load current encryption key")?
+            .into();
 
-        let client = Client::new(
-            &settings.sync_address,
-            settings.session_token().await?.as_str(),
-            settings.network_connect_timeout,
-            settings.network_timeout * 10,
-        )
-        .expect("failed to create client");
+        // 2. Decode and validate the provided key
+        let new_key: [u8; 32] = decode_key(self.key.clone())
+            .wrap_err("the provided --key is not a valid base64-encoded encryption key")?
+            .into();
 
-        // Clear the remote store first
-        println!("Clearing remote store...");
-        client
-            .delete_store()
+        if current_key == new_key {
+            println!("The provided key is identical to the current key — nothing to do.");
+            return Ok(());
+        }
+
+        // 3. Verify the local store decrypts with the current key
+        println!("Verifying local store decrypts with current key...");
+        store.verify(&current_key).await.wrap_err(
+            "Some records could not be decrypted with the current key. \
+                 Run `atuin store verify` or `atuin store purge` first.",
+        )?;
+
+        let record_count = store.len_all().await?;
+        println!("Verified {record_count} records");
+
+        // 4. Dry run — stop here
+        if self.dry_run {
+            println!("\n[dry-run] Would re-encrypt {record_count} records with the provided key");
+            println!("[dry-run] No changes were made");
+            return Ok(());
+        }
+
+        // 5. Confirm unless --force
+        if !self.force {
+            println!();
+            println!("WARNING: This will:");
+            println!("  - Re-encrypt all {record_count} records in the local store");
+            println!("  - Replace your encryption key file");
+            #[cfg(feature = "sync")]
+            if self.push {
+                println!("  - Clear the remote store and re-upload everything");
+            }
+            println!();
+            print!("Continue? [y/N] ");
+            io::stdout().flush()?;
+
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+            let input = input.trim().to_lowercase();
+
+            if input != "y" && input != "yes" {
+                println!("Aborted.");
+                return Ok(());
+            }
+        }
+
+        // 6. Re-encrypt the local store
+        println!("\nRe-encrypting local store with provided key...");
+        store
+            .re_encrypt(&current_key, &new_key)
             .await
-            .wrap_err("failed to clear remote store")?;
+            .wrap_err("failed to re-encrypt store — the old key file has NOT been changed")?;
+        println!("Re-encryption complete");
 
-        // Diff and upload everything
-        let (diff, _) = sync::diff(settings, store).await?;
-        let operations = sync::operations(diff, store).await?;
+        // 7. Optionally force-push to remote
+        #[cfg(feature = "sync")]
+        if self.push {
+            force_push_to_remote(settings, &store).await?;
+        }
 
-        let upload_ops: Vec<Operation> = operations
-            .into_iter()
-            .filter(|op| matches!(op, Operation::Upload { .. }))
-            .collect();
+        // 8. Save old key as key.rotated, write new key to disk
+        save_old_key_as_rotated(settings).wrap_err("failed to save old key as key.rotated")?;
 
-        if upload_ops.is_empty() {
-            println!("No records to upload");
-        } else {
-            let (uploaded, _) = sync::sync_remote(upload_ops, store, settings, 100).await?;
-            println!("Uploaded {uploaded} records to remote server");
+        let new_key_encoded =
+            encode_key(&new_key.into()).wrap_err("could not encode provided key")?;
+        write_key_to_disk(settings, &new_key_encoded).await?;
+
+        println!();
+        println!("Re-encryption complete!");
+        println!("Your local store now uses the provided key.");
+        println!();
+        println!("The old key has been saved as key.rotated for fallback decryption.");
+        println!("Once all devices have migrated, you can safely remove the key.rotated file:");
+        println!("  rm ~/.local/share/atuin/key.rotated");
+
+        #[cfg(feature = "sync")]
+        if !self.push {
+            println!();
+            println!("NOTE: The remote store has NOT been updated.");
+            println!("To push your re-encrypted records, run:");
+            println!("  atuin store push --force");
         }
 
         Ok(())
