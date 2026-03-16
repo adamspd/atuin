@@ -970,6 +970,10 @@ pub struct Settings {
     pub db_path: String,
     pub record_store_path: String,
     pub key_path: String,
+    /// Path to the fallback (old) key, used during the transition period
+    /// after key rotation. Auto-detected from `key.rotated` alongside the
+    /// primary key file. Cleared once all machines have migrated.
+    pub fallback_key_path: Option<String>,
     pub search_mode: SearchMode,
     pub filter_mode: Option<FilterMode>,
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
@@ -1242,13 +1246,22 @@ impl Settings {
         let logs_dir = atuin_common::utils::logs_dir();
 
         let key_path = data_dir.join("key");
+        let rotated_path = data_dir.join("key.rotated");
         let meta_path = data_dir.join("meta.db");
+
+        // Auto-detect key.rotated alongside key and expose as fallback_key_path default
+        let default_fallback: Option<String> = if rotated_path.exists() {
+            rotated_path.to_str().map(|s| s.to_string())
+        } else {
+            None
+        };
 
         Ok(Config::builder()
             .set_default("history_format", "{time}\t{command}\t{duration}")?
             .set_default("db_path", db_path.to_str())?
             .set_default("record_store_path", record_store_path.to_str())?
             .set_default("key_path", key_path.to_str())?
+            .set_default("fallback_key_path", default_fallback)?
             .set_default("dialect", "us")?
             .set_default("timezone", "local")?
             .set_default("auto_sync", true)?
@@ -1432,6 +1445,10 @@ impl Settings {
         settings.db_path = Self::expand_path(settings.db_path)?;
         settings.record_store_path = Self::expand_path(settings.record_store_path)?;
         settings.key_path = Self::expand_path(settings.key_path)?;
+        settings.fallback_key_path = settings
+            .fallback_key_path
+            .map(Self::expand_path)
+            .transpose()?;
         settings.daemon.socket_path = Self::expand_path(settings.daemon.socket_path)?;
         settings.daemon.pidfile_path = Self::expand_path(settings.daemon.pidfile_path)?;
         settings.logs.dir = Self::expand_path(settings.logs.dir)?;

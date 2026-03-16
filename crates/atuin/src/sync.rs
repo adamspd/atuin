@@ -25,17 +25,26 @@ pub async fn build(
         .context("could not load encryption key")?
         .into();
 
+    let fallback_key: Option<[u8; 32]> = atuin_client::encryption::load_fallback_key(settings)
+        .context("could not load fallback encryption key")?
+        .map(std::convert::Into::into);
+
     let host_id = Settings::host_id().await?;
 
     let downloaded = downloaded.unwrap_or(&[]);
 
     let kv_db = atuin_kv::database::Database::new(settings.kv.db_path.clone(), 1.0).await?;
 
-    let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
-    let alias_store = AliasStore::new(store.clone(), host_id, encryption_key);
-    let var_store = VarStore::new(store.clone(), host_id, encryption_key);
-    let kv_store = KvStore::new(store.clone(), kv_db, host_id, encryption_key);
-    let script_store = ScriptStore::new(store.clone(), host_id, encryption_key);
+    let history_store =
+        HistoryStore::new(store.clone(), host_id, encryption_key).with_fallback_key(fallback_key);
+    let alias_store =
+        AliasStore::new(store.clone(), host_id, encryption_key).with_fallback_key(fallback_key);
+    let var_store =
+        VarStore::new(store.clone(), host_id, encryption_key).with_fallback_key(fallback_key);
+    let kv_store =
+        KvStore::new(store.clone(), kv_db, host_id, encryption_key).with_fallback_key(fallback_key);
+    let script_store =
+        ScriptStore::new(store.clone(), host_id, encryption_key).with_fallback_key(fallback_key);
 
     history_store.incremental_build(db, downloaded).await?;
 

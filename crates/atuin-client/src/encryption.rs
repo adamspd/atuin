@@ -67,6 +67,19 @@ pub fn load_key(settings: &Settings) -> Result<Key> {
     Ok(key)
 }
 
+/// Load the fallback (old) encryption key from `settings.fallback_key_path`.
+/// Returns `None` if the path is not configured or the file does not exist.
+pub fn load_fallback_key(settings: &Settings) -> Result<Option<Key>> {
+    match &settings.fallback_key_path {
+        Some(path) if PathBuf::from(path).exists() => {
+            let raw = fs_err::read_to_string(path)?;
+            let key = decode_key(raw)?;
+            Ok(Some(key))
+        }
+        _ => Ok(None),
+    }
+}
+
 pub fn encode_key(key: &Key) -> Result<String> {
     let mut buf = vec![];
     rmp::encode::write_array_len(&mut buf, key.len() as u32)

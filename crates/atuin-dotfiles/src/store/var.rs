@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_common::record::{DecryptedData, Host, HostId};
+use atuin_common::record::{DecryptedData, EncryptedData, Host, HostId, Record};
 use eyre::{Result, bail, ensure, eyre};
 
 use atuin_client::record::encryption::PASETO_V4;
@@ -103,6 +103,7 @@ pub struct VarStore {
     pub store: SqliteStore,
     pub host_id: HostId,
     pub encryption_key: [u8; 32],
+    pub fallback_encryption_key: Option<[u8; 32]>,
 }
 
 impl VarStore {
@@ -112,7 +113,22 @@ impl VarStore {
             store,
             host_id,
             encryption_key,
+            fallback_encryption_key: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_fallback_key(mut self, key: Option<[u8; 32]>) -> Self {
+        self.fallback_encryption_key = key;
+        self
+    }
+
+    fn decrypt_record(&self, record: Record<EncryptedData>) -> Result<Record<DecryptedData>> {
+        atuin_client::record::encryption::decrypt_record(
+            record,
+            &self.encryption_key,
+            self.fallback_encryption_key.as_ref(),
+        )
     }
 
     /// Escape a value for use in POSIX shells (bash, zsh)
@@ -350,7 +366,7 @@ impl VarStore {
             let version = record.version.clone();
 
             let decrypted = match version.as_str() {
-                DOTFILES_VAR_VERSION => record.decrypt::<PASETO_V4>(&self.encryption_key)?,
+                DOTFILES_VAR_VERSION => self.decrypt_record(record)?,
                 version => bail!("unknown version {version:?}"),
             };
 

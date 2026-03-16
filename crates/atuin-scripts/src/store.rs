@@ -2,7 +2,9 @@ use eyre::{Result, bail};
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::{encryption::PASETO_V4, store::Store};
-use atuin_common::record::{Host, HostId, Record, RecordId, RecordIdx};
+use atuin_common::record::{
+    DecryptedData, EncryptedData, Host, HostId, Record, RecordId, RecordIdx,
+};
 use record::ScriptRecord;
 use script::{SCRIPT_TAG, SCRIPT_VERSION, Script};
 
@@ -16,6 +18,7 @@ pub struct ScriptStore {
     pub store: SqliteStore,
     pub host_id: HostId,
     pub encryption_key: [u8; 32],
+    pub fallback_encryption_key: Option<[u8; 32]>,
 }
 
 impl ScriptStore {
@@ -24,7 +27,22 @@ impl ScriptStore {
             store,
             host_id,
             encryption_key,
+            fallback_encryption_key: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_fallback_key(mut self, key: Option<[u8; 32]>) -> Self {
+        self.fallback_encryption_key = key;
+        self
+    }
+
+    fn decrypt_record(&self, record: Record<EncryptedData>) -> Result<Record<DecryptedData>> {
+        atuin_client::record::encryption::decrypt_record(
+            record,
+            &self.encryption_key,
+            self.fallback_encryption_key.as_ref(),
+        )
     }
 
     async fn push_record(&self, record: ScriptRecord) -> Result<(RecordId, RecordIdx)> {
@@ -77,7 +95,7 @@ impl ScriptStore {
         for record in records.into_iter() {
             let script = match record.version.as_str() {
                 SCRIPT_VERSION => {
-                    let decrypted = record.decrypt::<PASETO_V4>(&self.encryption_key)?;
+                    let decrypted = self.decrypt_record(record)?;
 
                     ScriptRecord::deserialize(&decrypted.data, SCRIPT_VERSION)
                 }

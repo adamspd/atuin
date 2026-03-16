@@ -5,7 +5,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 // This will be noticeable similar to the kv store, though I expect the two shall diverge
 // While we will support a range of shell config, I'd rather have a larger number of small records
 // + stores, rather than one mega config store.
-use atuin_common::record::{DecryptedData, Host, HostId};
+use atuin_common::record::{DecryptedData, EncryptedData, Host, HostId, Record};
 use atuin_common::utils::unquote;
 use eyre::{Result, bail, ensure, eyre};
 
@@ -128,6 +128,7 @@ pub struct AliasStore {
     pub store: SqliteStore,
     pub host_id: HostId,
     pub encryption_key: [u8; 32],
+    pub fallback_encryption_key: Option<[u8; 32]>,
 }
 
 impl AliasStore {
@@ -137,7 +138,22 @@ impl AliasStore {
             store,
             host_id,
             encryption_key,
+            fallback_encryption_key: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_fallback_key(mut self, key: Option<[u8; 32]>) -> Self {
+        self.fallback_encryption_key = key;
+        self
+    }
+
+    fn decrypt_record(&self, record: Record<EncryptedData>) -> Result<Record<DecryptedData>> {
+        atuin_client::record::encryption::decrypt_record(
+            record,
+            &self.encryption_key,
+            self.fallback_encryption_key.as_ref(),
+        )
     }
 
     pub async fn posix(&self) -> Result<String> {
@@ -303,7 +319,7 @@ impl AliasStore {
             let version = record.version.clone();
 
             let decrypted = match version.as_str() {
-                CONFIG_SHELL_ALIAS_VERSION => record.decrypt::<PASETO_V4>(&self.encryption_key)?,
+                CONFIG_SHELL_ALIAS_VERSION => self.decrypt_record(record)?,
                 version => bail!("unknown version {version:?}"),
             };
 

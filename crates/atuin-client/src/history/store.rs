@@ -8,7 +8,9 @@ use crate::{
     database::{Database, current_context},
     record::{encryption::PASETO_V4, sqlite_store::SqliteStore, store::Store},
 };
-use atuin_common::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
+use atuin_common::record::{
+    DecryptedData, EncryptedData, Host, HostId, Record, RecordId, RecordIdx,
+};
 
 use super::{HISTORY_TAG, HISTORY_VERSION, HISTORY_VERSION_V0, History, HistoryId};
 
@@ -17,6 +19,7 @@ pub struct HistoryStore {
     pub store: SqliteStore,
     pub host_id: HostId,
     pub encryption_key: [u8; 32],
+    pub fallback_encryption_key: Option<[u8; 32]>,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]
@@ -114,7 +117,22 @@ impl HistoryStore {
             store,
             host_id,
             encryption_key,
+            fallback_encryption_key: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_fallback_key(mut self, key: Option<[u8; 32]>) -> Self {
+        self.fallback_encryption_key = key;
+        self
+    }
+
+    fn decrypt_record(&self, record: Record<EncryptedData>) -> Result<Record<DecryptedData>> {
+        crate::record::encryption::decrypt_record(
+            record,
+            &self.encryption_key,
+            self.fallback_encryption_key.as_ref(),
+        )
     }
 
     async fn push_record(&self, record: HistoryRecord) -> Result<(RecordId, RecordIdx)> {
@@ -198,7 +216,7 @@ impl HistoryStore {
             let hist = match record.version.as_str() {
                 HISTORY_VERSION_V0 | HISTORY_VERSION => {
                     let version = record.version.clone();
-                    let decrypted = record.decrypt::<PASETO_V4>(&self.encryption_key)?;
+                    let decrypted = self.decrypt_record(record)?;
 
                     HistoryRecord::deserialize(&decrypted.data, version.as_str())
                 }
@@ -259,7 +277,7 @@ impl HistoryStore {
             }
 
             let version = record.version.clone();
-            let decrypted = record.decrypt::<PASETO_V4>(&self.encryption_key)?;
+            let decrypted = self.decrypt_record(record)?;
             let record = match version.as_str() {
                 HISTORY_VERSION_V0 | HISTORY_VERSION => {
                     HistoryRecord::deserialize(&decrypted.data, version.as_str())?

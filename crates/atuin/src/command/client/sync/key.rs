@@ -76,6 +76,7 @@ pub struct RotateCmd {
 }
 
 impl RotateCmd {
+    #[allow(clippy::too_many_lines)]
     pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
         // 1. Load the current key
         let current_key: [u8; 32] = load_key(settings)
@@ -157,7 +158,24 @@ impl RotateCmd {
             self.force_push(settings, &store).await?;
         }
 
-        // 8. Write the new key to disk
+        // 8. Save old key as key.rotated (fallback for other machines not yet migrated)
+        let old_key_encoded =
+            encode_key(&load_key(settings).wrap_err("could not reload current key for backup")?)
+                .wrap_err("could not encode old key")?;
+
+        let rotated_key_path = PathBuf::from(settings.key_path.as_str())
+            .parent()
+            .expect("key_path must have a parent directory")
+            .join("key.rotated");
+
+        println!(
+            "Saving old key as fallback to {}",
+            rotated_key_path.display()
+        );
+        std::fs::write(&rotated_key_path, old_key_encoded.as_bytes())
+            .wrap_err("failed to write key.rotated fallback file")?;
+
+        // 9. Write the new key to disk
         let key_path = PathBuf::from(settings.key_path.as_str());
         println!("Saving new key to {}", key_path.display());
         let mut file = File::create(&key_path)

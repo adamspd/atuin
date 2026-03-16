@@ -1,5 +1,5 @@
 use atuin_common::record::{
-    AdditionalData, DecryptedData, EncryptedData, Encryption, HostId, RecordId, RecordIdx,
+    AdditionalData, DecryptedData, EncryptedData, Encryption, HostId, Record, RecordId, RecordIdx,
 };
 use base64::{Engine, engine::general_purpose};
 use eyre::{Context, Result, ensure};
@@ -111,6 +111,71 @@ impl Encryption for PASETO_V4 {
         let data = general_purpose::URL_SAFE_NO_PAD.decode(payload.data)?;
         Ok(DecryptedData(data))
     }
+}
+
+impl PASETO_V4 {
+    /// Attempt decryption with `primary_key`, falling back to `fallback_key`
+    /// if the record was encrypted with a different key ID.
+    /// This is used during the transition period after key rotation, when some
+    /// remote records were encrypted by other machines still using the old key.
+    pub fn decrypt_with_fallback(
+        data: EncryptedData,
+        ad: AdditionalData,
+        primary_key: &[u8; 32],
+        fallback_key: &[u8; 32],
+    ) -> Result<DecryptedData> {
+        // The AtuinFooter (kid + wpk) is stored unencrypted in content_encryption_key.
+        // We can read the kid to know which key was used — no brute-force needed.
+        let footer: AtuinFooter = serde_json::from_str(&data.content_encryption_key)
+            .context("wrapped cek did not contain the correct contents")?;
+
+        let primary_kid = Key::<V4, Local>::from_bytes(*primary_key).to_id();
+        let fallback_kid = Key::<V4, Local>::from_bytes(*fallback_key).to_id();
+
+        if footer.kid == primary_kid {
+            Self::decrypt(data, ad, primary_key)
+        } else if footer.kid == fallback_kid {
+            Self::decrypt(data, ad, fallback_key)
+        } else {
+            eyre::bail!(
+                "attempting to decrypt with incorrect key. \
+                 record uses key {}, but neither primary ({}) nor fallback ({}) match",
+                footer.kid,
+                primary_kid,
+                fallback_kid
+            )
+        }
+    }
+}
+
+/// Decrypt a record using a primary key and an optional fallback key.
+/// When `fallback_key` is `Some`, uses kid-based dispatch to pick the correct key
+/// without brute-forcing. When `None`, uses the standard single-key path.
+pub fn decrypt_record(
+    record: Record<EncryptedData>,
+    key: &[u8; 32],
+    fallback_key: Option<&[u8; 32]>,
+) -> Result<Record<DecryptedData>> {
+    let ad = AdditionalData {
+        id: &record.id,
+        version: &record.version,
+        tag: &record.tag,
+        host: &record.host.id,
+        idx: &record.idx,
+    };
+    let data = match fallback_key {
+        Some(fk) => PASETO_V4::decrypt_with_fallback(record.data, ad, key, fk)?,
+        None => PASETO_V4::decrypt(record.data, ad, key)?,
+    };
+    Ok(Record {
+        data,
+        id: record.id,
+        host: record.host,
+        idx: record.idx,
+        timestamp: record.timestamp,
+        version: record.version,
+        tag: record.tag,
+    })
 }
 
 impl PASETO_V4 {

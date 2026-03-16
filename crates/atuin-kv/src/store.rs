@@ -4,7 +4,9 @@ use eyre::{Result, bail};
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::{encryption::PASETO_V4, store::Store};
-use atuin_common::record::{Host, HostId, Record, RecordId, RecordIdx};
+use atuin_common::record::{
+    DecryptedData, EncryptedData, Host, HostId, Record, RecordId, RecordIdx,
+};
 use entry::KvEntry;
 use record::{KV_TAG, KV_VERSION, KvRecord};
 
@@ -19,6 +21,7 @@ pub struct KvStore {
     pub kv_db: Database,
     pub host_id: HostId,
     pub encryption_key: [u8; 32],
+    pub fallback_encryption_key: Option<[u8; 32]>,
 }
 
 impl KvStore {
@@ -33,7 +36,22 @@ impl KvStore {
             kv_db,
             host_id,
             encryption_key,
+            fallback_encryption_key: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_fallback_key(mut self, key: Option<[u8; 32]>) -> Self {
+        self.fallback_encryption_key = key;
+        self
+    }
+
+    fn decrypt_record(&self, record: Record<EncryptedData>) -> Result<Record<DecryptedData>> {
+        atuin_client::record::encryption::decrypt_record(
+            record,
+            &self.encryption_key,
+            self.fallback_encryption_key.as_ref(),
+        )
     }
 
     pub async fn set(&self, namespace: &str, key: &str, value: &str) -> Result<()> {
@@ -119,7 +137,7 @@ impl KvStore {
         // only visit each KV once, inserting or deleting based on the first time we see it
         for record in tagged {
             let decrypted = match record.version.as_str() {
-                "v0" | KV_VERSION => record.decrypt::<PASETO_V4>(&self.encryption_key)?,
+                "v0" | KV_VERSION => self.decrypt_record(record)?,
                 version => bail!("unknown version {version:?}"),
             };
 
