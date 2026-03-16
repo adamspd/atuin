@@ -9,6 +9,7 @@ use atuin_client::{
     settings::Settings,
 };
 
+pub mod key;
 mod status;
 
 use crate::command::client::account;
@@ -32,12 +33,9 @@ pub enum Cmd {
     /// Register with the configured server
     Register(account::register::Cmd),
 
-    /// Print the encryption key for transfer to another machine
-    Key {
-        /// Switch to base64 output of the key
-        #[arg(long)]
-        base64: bool,
-    },
+    /// Manage the encryption key (show, rotate)
+    #[command(subcommand)]
+    Key(key::Cmd),
 
     /// Display the sync status
     Status,
@@ -56,20 +54,7 @@ impl Cmd {
             Self::Logout => account::logout::run().await,
             Self::Register(r) => r.run(&settings).await,
             Self::Status => status::run(&settings, db).await,
-            Self::Key { base64 } => {
-                use atuin_client::encryption::{encode_key, load_key};
-                let key = load_key(&settings).wrap_err("could not load encryption key")?;
-
-                if base64 {
-                    let encode = encode_key(&key).wrap_err("could not encode encryption key")?;
-                    println!("{encode}");
-                } else {
-                    let mnemonic = bip39::Mnemonic::from_entropy(&key, bip39::Language::English)
-                        .map_err(|_| eyre::eyre!("invalid key"))?;
-                    println!("{mnemonic}");
-                }
-                Ok(())
-            }
+            Self::Key(cmd) => cmd.run(&settings, store).await,
         }
     }
 }
