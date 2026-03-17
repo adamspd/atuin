@@ -148,6 +148,35 @@ impl PASETO_V4 {
     }
 }
 
+impl PASETO_V4 {
+    /// Re-encrypt a record's CEK from `old_key` to `new_key`, handling the case
+    /// where some records may already be encrypted with `new_key`.
+    ///
+    /// - If the record's kid matches `new_key`, return as-is (already migrated)
+    /// - If the record's kid matches `old_key`, re-wrap the CEK with `new_key`
+    /// - Otherwise, fail
+    pub fn re_encrypt_with_fallback(
+        mut data: EncryptedData,
+        old_key: &[u8; 32],
+        new_key: &[u8; 32],
+    ) -> Result<EncryptedData> {
+        let footer: AtuinFooter = serde_json::from_str(&data.content_encryption_key)
+            .context("wrapped cek did not contain the correct contents")?;
+
+        let new_kid = Key::<V4, Local>::from_bytes(*new_key).to_id();
+
+        if footer.kid == new_kid {
+            // Already encrypted with the target key — nothing to do
+            return Ok(data);
+        }
+
+        // Not the new key — must be the old key. decrypt_cek will verify the kid.
+        let cek = Self::decrypt_cek(data.content_encryption_key, old_key)?;
+        data.content_encryption_key = Self::encrypt_cek(cek, new_key);
+        Ok(data)
+    }
+}
+
 /// Decrypt a record using a primary key and an optional fallback key.
 /// When `fallback_key` is `Some`, uses kid-based dispatch to pick the correct key
 /// without brute-forcing. When `None`, uses the standard single-key path.

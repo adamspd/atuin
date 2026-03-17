@@ -34,6 +34,7 @@ pub trait Store {
 
     async fn re_encrypt(&self, old_key: &[u8; 32], new_key: &[u8; 32]) -> Result<()>;
     async fn verify(&self, key: &[u8; 32]) -> Result<()>;
+    async fn verify_with_fallback(&self, key: &[u8; 32], fallback_key: &[u8; 32]) -> Result<()>;
     async fn purge(&self, key: &[u8; 32]) -> Result<()>;
 
     /// Get the next `limit` records, after and including the given index

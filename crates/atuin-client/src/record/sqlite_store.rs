@@ -309,7 +309,19 @@ impl Store for SqliteStore {
 
         let re_encrypted = all
             .into_iter()
-            .map(|record| record.re_encrypt::<PASETO_V4>(old_key, new_key))
+            .map(|record| {
+                let data =
+                    PASETO_V4::re_encrypt_with_fallback(record.data, old_key, new_key)?;
+                Ok(Record {
+                    data,
+                    id: record.id,
+                    host: record.host,
+                    idx: record.idx,
+                    timestamp: record.timestamp,
+                    version: record.version,
+                    tag: record.tag,
+                })
+            })
             .collect::<Result<Vec<_>>>()?;
 
         // next up, we delete all the old data and reinsert the new stuff
@@ -341,6 +353,21 @@ impl Store for SqliteStore {
 
         all.into_iter()
             .map(|record| record.decrypt::<PASETO_V4>(key))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(())
+    }
+
+    /// Verify that every record can be decrypted with either the primary key or
+    /// a fallback key. This handles mixed-key stores where some records were
+    /// encrypted with the old key and some with the new key.
+    async fn verify_with_fallback(&self, key: &[u8; 32], fallback_key: &[u8; 32]) -> Result<()> {
+        use super::encryption::decrypt_record;
+
+        let all = self.load_all().await?;
+
+        all.into_iter()
+            .map(|record| decrypt_record(record, key, Some(fallback_key)).map(|_| ()))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(())

@@ -7,7 +7,7 @@ use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
 use atuin_client::{
-    encryption::{decode_key, encode_key, generate_encoded_key, load_key},
+    encryption::{decode_key, encode_key, generate_encoded_key, load_fallback_key, load_key},
     record::sqlite_store::SqliteStore,
     record::store::Store,
     settings::Settings,
@@ -95,14 +95,33 @@ impl RotateCmd {
         self.sync_pull(settings, &store).await?;
 
         // 3. Verify the current store can be decrypted (catch problems early)
-        println!("Verifying existing store can be decrypted with current key...");
-        store
-            .verify(&current_key)
-            .await
-            .wrap_err("Some records could not be decrypted with the current key. Run `atuin store verify` or `atuin store purge` first.")?;
-
+        //    Try the current key and key.rotated (if it exists) as fallback,
+        //    since a previous rotation may have left some records with the old key.
+        //    Skip when --force: the re-encryption itself handles mixed-key stores.
         let record_count = store.len_all().await?;
-        println!("Verified {record_count} records");
+        if !self.force {
+            let fallback: Option<[u8; 32]> = load_fallback_key(settings)
+                .wrap_err("could not load fallback key")?
+                .map(Into::into);
+            println!("Verifying existing store can be decrypted...");
+            match fallback {
+                Some(fk) => {
+                    store
+                        .verify_with_fallback(&current_key, &fk)
+                        .await
+                        .wrap_err("Some records could not be decrypted with the current or fallback key. Run `atuin store verify` or `atuin store purge` first.")?;
+                }
+                None => {
+                    store
+                        .verify(&current_key)
+                        .await
+                        .wrap_err("Some records could not be decrypted with the current key. Run `atuin store verify` or `atuin store purge` first.")?;
+                }
+            }
+            println!("Verified {record_count} records");
+        } else {
+            println!("Skipping verification (--force). {record_count} records to re-encrypt.");
+        }
 
         // 4. Generate a new key
         let (new_key_raw, new_key_encoded) =
@@ -382,9 +401,11 @@ async fn force_push_to_remote(settings: &Settings, store: &SqliteStore) -> Resul
 #[derive(Args, Debug)]
 pub struct ReEncryptCmd {
     /// The new key to re-encrypt to (base64 format, as printed by
-    /// `atuin key show --base64` or `atuin key rotate`)
+    /// `atuin key show --base64` or `atuin key rotate`).
+    /// If omitted, uses the key already in the key file and treats key.rotated
+    /// as the old key.
     #[arg(long)]
-    pub key: String,
+    pub key: Option<String>,
 
     /// Validate that the local store decrypts and the provided key is valid,
     /// but write nothing
@@ -403,34 +424,66 @@ pub struct ReEncryptCmd {
 
 impl ReEncryptCmd {
     pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
-        // 1. Load the current (old) key from disk
-        let current_key: [u8; 32] = load_key(settings)
-            .wrap_err("could not load current encryption key")?
-            .into();
+        // Determine old key and new key depending on whether --key was given.
+        //
+        // With --key:
+        //   old_key = current key file on disk
+        //   new_key = the provided --key value
+        //
+        // Without --key:
+        //   new_key = current key file on disk (user already placed the new key there)
+        //   old_key = key.rotated (the previous key)
+        let (old_key, new_key, key_from_file): ([u8; 32], [u8; 32], bool) = match &self.key {
+            Some(provided) => {
+                let current: [u8; 32] = load_key(settings)
+                    .wrap_err("could not load current encryption key")?
+                    .into();
+                let new: [u8; 32] = decode_key(provided.clone())
+                    .wrap_err("the provided --key is not a valid base64-encoded encryption key")?
+                    .into();
+                (current, new, false)
+            }
+            None => {
+                // The key file already contains the target key.
+                // The old key must be in key.rotated.
+                let new: [u8; 32] = load_key(settings)
+                    .wrap_err("could not load encryption key from key file")?
+                    .into();
+                let old: [u8; 32] = load_fallback_key(settings)
+                    .wrap_err("could not load fallback key")?
+                    .ok_or_else(|| eyre::eyre!(
+                        "No --key provided and no key.rotated file found. \
+                         Either pass --key <base64-key> or place the old key in key.rotated."
+                    ))?
+                    .into();
+                (old, new, true)
+            }
+        };
 
-        // 2. Decode and validate the provided key
-        let new_key: [u8; 32] = decode_key(self.key.clone())
-            .wrap_err("the provided --key is not a valid base64-encoded encryption key")?
-            .into();
-
-        if current_key == new_key {
-            println!("The provided key is identical to the current key — nothing to do.");
+        if old_key == new_key {
+            println!("The old and new keys are identical — nothing to do.");
             return Ok(());
         }
 
-        // 3. Verify the local store decrypts with the current key
-        println!("Verifying local store decrypts with current key...");
-        store.verify(&current_key).await.wrap_err(
-            "Some records could not be decrypted with the current key. \
-                 Run `atuin store verify` or `atuin store purge` first.",
-        )?;
-
+        // 3. Verify the local store decrypts with the old key and/or
+        //    the new key. A mixed-key store is expected when a rotation was
+        //    done on another device and some records were already re-encrypted.
+        //    With --force we skip verification entirely.
         let record_count = store.len_all().await?;
-        println!("Verified {record_count} records");
+        if !self.force {
+            println!("Verifying local store decrypts with old and/or new key...");
+            store.verify_with_fallback(&old_key, &new_key).await.wrap_err(
+                "Some records could not be decrypted with either the old or the new key. \
+                     Run `atuin store verify` or `atuin store purge` first.",
+            )?;
+            println!("Verified {record_count} records");
+        } else {
+            println!("Skipping verification (--force). {record_count} records to re-encrypt.");
+        }
 
         // 4. Dry run — stop here
         if self.dry_run {
-            println!("\n[dry-run] Would re-encrypt {record_count} records with the provided key");
+            println!("\n[dry-run] Would re-encrypt {record_count} records with the new key");
             println!("[dry-run] No changes were made");
             return Ok(());
         }
@@ -440,7 +493,9 @@ impl ReEncryptCmd {
             println!();
             println!("WARNING: This will:");
             println!("  - Re-encrypt all {record_count} records in the local store");
-            println!("  - Replace your encryption key file");
+            if !key_from_file {
+                println!("  - Replace your encryption key file");
+            }
             #[cfg(feature = "sync")]
             if self.push {
                 println!("  - Clear the remote store and re-upload everything");
@@ -460,11 +515,11 @@ impl ReEncryptCmd {
         }
 
         // 6. Re-encrypt the local store
-        println!("\nRe-encrypting local store with provided key...");
+        println!("\nRe-encrypting local store...");
         store
-            .re_encrypt(&current_key, &new_key)
+            .re_encrypt(&old_key, &new_key)
             .await
-            .wrap_err("failed to re-encrypt store — the old key file has NOT been changed")?;
+            .wrap_err("failed to re-encrypt store — the key file has NOT been changed")?;
         println!("Re-encryption complete");
 
         // 7. Optionally force-push to remote
@@ -473,12 +528,16 @@ impl ReEncryptCmd {
             force_push_to_remote(settings, &store).await?;
         }
 
-        // 8. Save old key as key.rotated, write new key to disk
-        save_old_key_as_rotated(settings).wrap_err("failed to save old key as key.rotated")?;
+        // 8. Save old key as key.rotated and write new key to disk,
+        //    but only when --key was provided (otherwise the key file
+        //    already has the right key and key.rotated already exists).
+        if !key_from_file {
+            save_old_key_as_rotated(settings).wrap_err("failed to save old key as key.rotated")?;
 
-        let new_key_encoded =
-            encode_key(&new_key.into()).wrap_err("could not encode provided key")?;
-        write_key_to_disk(settings, &new_key_encoded).await?;
+            let new_key_encoded =
+                encode_key(&new_key.into()).wrap_err("could not encode provided key")?;
+            write_key_to_disk(settings, &new_key_encoded).await?;
+        }
 
         println!();
         println!("Re-encryption complete!");
