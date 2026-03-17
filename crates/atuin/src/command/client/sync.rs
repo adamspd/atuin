@@ -52,7 +52,7 @@ impl Cmd {
             Self::Sync { force } => run(&settings, force, db, store).await,
             Self::Login(l) => l.run(&settings, &store).await,
             Self::Logout => account::logout::run().await,
-            Self::Register(r) => r.run(&settings).await,
+            Self::Register(r) => r.run(&settings, &store).await,
             Self::Status => status::run(&settings, db).await,
             Self::Key(cmd) => cmd.run(&settings, store).await,
         }

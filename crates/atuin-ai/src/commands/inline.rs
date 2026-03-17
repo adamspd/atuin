@@ -26,6 +26,17 @@ pub async fn run(
     settings: &atuin_client::settings::Settings,
     output_for_hook: bool,
 ) -> Result<()> {
+    if !settings.ai.enabled {
+        emit_shell_result(
+            Action::Print(
+                "Atuin AI is not enabled. Please enable it in your settings or run `atuin setup`."
+                    .to_string(),
+            ),
+            output_for_hook,
+        );
+        return Ok(());
+    }
+
     // Install panic hook once at entry point to ensure terminal restoration
     install_panic_hook();
 
@@ -45,7 +56,12 @@ pub async fn run(
     let token = if let Some(token) = &api_token {
         token.to_string()
     } else {
-        ensure_hub_session(settings, endpoint).await?
+        // If no token is provided, assume we're using Hub as the endpoint if we're using Hub sync
+        if settings.is_hub_sync() {
+            ensure_hub_session(settings).await?
+        } else {
+            bail!("No API token provided in ai.api_token settings or command line argument.")
+        }
     };
 
     let action = run_inline_tui(
@@ -57,24 +73,32 @@ pub async fn run(
         settings,
     )
     .await?;
-    emit_shell_result(action.0, &action.1, output_for_hook);
+    emit_shell_result(action, output_for_hook);
 
     Ok(())
 }
 
-async fn ensure_hub_session(
-    settings: &atuin_client::settings::Settings,
-    hub_address: &str,
-) -> Result<String> {
+async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Result<String> {
     if let Some(token) = atuin_client::hub::get_session_token().await? {
         debug!("Found Hub session, using existing token");
         return Ok(token);
     }
 
+    let hub_address = settings.active_hub_endpoint().unwrap_or_default();
+
+    let will_sync = settings.is_hub_sync();
+
     info!("No Hub session found, prompting for authentication");
 
     println!("Atuin AI requires authenticating with Atuin Hub.");
-    println!("This is separate from your sync setup.");
+    if will_sync {
+        println!(
+            "Once logged in, your shell history will be synchronized via Atuin Hub if auto_sync is enabled or when manually syncing."
+        )
+    }
+    println!(
+        "If you have an existing Atuin sync account, you can log in with your existing credentials."
+    );
     println!("Press enter to begin (or esc to cancel).");
     if !wait_for_login_confirmation()? {
         bail!("authentication canceled");
@@ -83,9 +107,7 @@ async fn ensure_hub_session(
     debug!("Starting Atuin Hub authentication...");
 
     println!("Authenticating with Atuin Hub...");
-    let mut auth_settings = settings.clone();
-    auth_settings.hub_address = hub_address.to_string();
-    let session = atuin_client::hub::HubAuthSession::start(&auth_settings).await?;
+    let session = atuin_client::hub::HubAuthSession::start(hub_address.as_ref()).await?;
     println!("Open this URL to continue:");
     println!("{}", session.auth_url);
 
@@ -99,6 +121,21 @@ async fn ensure_hub_session(
     info!("Authentication complete, saving session token");
 
     atuin_client::hub::save_session(&token).await?;
+
+    // Silently attempt to link CLI account to Hub if one exists
+    // This enables unified auth - users can use their Hub token for sync
+    if let Ok(meta) = atuin_client::settings::Settings::meta_store().await
+        && let Ok(Some(cli_token)) = meta.session_token().await
+    {
+        debug!("CLI session found, attempting to link accounts");
+        if let Err(e) = atuin_client::hub::link_account(hub_address.as_ref(), &cli_token).await {
+            // Don't fail AI flow if linking fails - it's not critical
+            debug!("Could not link CLI account to Hub: {}", e);
+        } else {
+            info!("Successfully linked CLI account to Hub");
+        }
+    }
+
     Ok(token)
 }
 
@@ -298,10 +335,11 @@ fn detect_os() -> String {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Action {
-    Execute,
-    Insert,
+    Execute(String),
+    Insert(String),
+    Print(String),
     Cancel,
 }
 
@@ -375,7 +413,7 @@ impl DebugStateLogger {
             .unwrap_or(0);
 
         // Calculate the actual content height needed for this state
-        let content_height = calculate_needed_height(state);
+        let content_height = calculate_needed_height(state, 0);
 
         let mut state_json = state_to_json(state);
         // Add dimensions for accurate replay
@@ -404,8 +442,23 @@ async fn run_inline_tui(
     keep_output: bool,
     debug_state_file: Option<String>,
     settings: &atuin_client::settings::Settings,
-) -> Result<(Action, String)> {
-    // Initialize terminal guard and app state
+) -> Result<Action> {
+    // Detect popup mode (only on Unix where atuin-hex socket is available)
+    #[cfg(unix)]
+    let mut popup_state = crate::tui::popup::try_setup_popup();
+    #[cfg(not(unix))]
+    let mut popup_state: Option<()> = None;
+
+    let popup_mode = popup_state.is_some();
+
+    // Initialize terminal guard: popup mode uses Fixed viewport, inline uses Inline
+    #[cfg(unix)]
+    let mut guard = if let Some(ref ps) = popup_state {
+        TerminalGuard::new_popup(ps.current_rect, ps.saved_screen.cursor_col)?
+    } else {
+        TerminalGuard::new(keep_output)?
+    };
+    #[cfg(not(unix))]
     let mut guard = TerminalGuard::new(keep_output)?;
     let mut app = App::new();
     if let Some(prompt) = initial_prompt {
@@ -451,16 +504,54 @@ async fn run_inline_tui(
 
     loop {
         // Ensure viewport is large enough for current content (capped at terminal height)
-        let needed_height = calculate_needed_height(&app.state);
+        // In popup mode, use the actual popup width for accurate height calculation
+        let card_width = if popup_mode {
+            #[cfg(unix)]
+            {
+                popup_state
+                    .as_ref()
+                    .map(|ps| {
+                        ps.current_rect
+                            .width
+                            .saturating_sub(crate::tui::popup::POPUP_MARGIN * 2)
+                    })
+                    .unwrap_or(0)
+            }
+            #[cfg(not(unix))]
+            {
+                0
+            }
+        } else {
+            0
+        };
+        let needed_height = calculate_needed_height(&app.state, card_width);
+
+        // Grow popup dynamically as content arrives
+        #[cfg(unix)]
+        if let Some(ref mut ps) = popup_state {
+            // Add vertical margin for visual separation from terminal content
+            let popup_height = needed_height.saturating_add(crate::tui::popup::POPUP_MARGIN * 2);
+            if let Some(new_rect) = ps.fit_to(popup_height) {
+                guard.resize_popup(new_rect)?;
+            }
+        }
+
         let actual_height = guard.ensure_height(needed_height)?;
 
         // Render current state
         let anchor_col = guard.anchor_col();
+        #[cfg(unix)]
+        let render_above = popup_state.as_ref().is_some_and(|ps| ps.render_above);
+        #[cfg(not(unix))]
+        let render_above = false;
+
         let ctx = RenderContext {
             theme,
             anchor_col,
             textarea: Some(&app.state.textarea),
             max_height: actual_height,
+            popup_mode,
+            render_above,
         };
         // Handle draw errors gracefully - cursor position reads can fail during resize
         if let Err(e) = guard.terminal().draw(|frame| {
@@ -561,8 +652,8 @@ async fn run_inline_tui(
             app.state.was_interrupted = false; // Reset the flag
         }
 
-        // Check exit condition
-        if app.state.should_exit {
+        // Check exit condition (includes Ctrl+C / SIGINT from event loop)
+        if app.state.should_exit || event_loop.is_shutdown() {
             break;
         }
 
@@ -597,11 +688,17 @@ async fn run_inline_tui(
         }
     }
 
+    // Restore popup area before guard drops (guard skips cleanup in popup mode)
+    #[cfg(unix)]
+    if let Some(ref ps) = popup_state {
+        crate::tui::popup::restore(ps);
+    }
+
     // Map exit action to return value
     let result = match app.state.exit_action {
-        Some(ExitAction::Execute(cmd)) => (Action::Execute, cmd),
-        Some(ExitAction::Insert(cmd)) => (Action::Insert, cmd),
-        _ => (Action::Cancel, String::new()),
+        Some(ExitAction::Execute(cmd)) => Action::Execute(cmd),
+        Some(ExitAction::Insert(cmd)) => Action::Insert(cmd),
+        _ => Action::Cancel,
     };
 
     Ok(result)
@@ -615,17 +712,19 @@ impl Drop for RawModeGuard {
     }
 }
 
-fn emit_shell_result(action: Action, command: &str, output_for_hook: bool) {
+fn emit_shell_result(action: Action, output_for_hook: bool) {
     if output_for_hook {
         match action {
-            Action::Execute => eprintln!("__atuin_ai_execute__:{command}"),
-            Action::Insert => eprintln!("__atuin_ai_insert__:{command}"),
+            Action::Execute(output) => eprintln!("__atuin_ai_execute__:{output}"),
+            Action::Insert(output) => eprintln!("__atuin_ai_insert__:{output}"),
+            Action::Print(output) => eprintln!("__atuin_ai_print__:{output}"),
             Action::Cancel => eprintln!("__atuin_ai_cancel__"),
         }
     } else {
         match action {
-            Action::Execute => eprintln!("{command}"),
-            Action::Insert => eprintln!("{command}"),
+            Action::Execute(output) => eprintln!("{output}"),
+            Action::Insert(output) => eprintln!("{output}"),
+            Action::Print(output) => eprintln!("{output}"),
             Action::Cancel => eprintln!(),
         }
     }

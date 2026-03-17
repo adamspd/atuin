@@ -6,6 +6,47 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- Nushell 0.111; future Nushell 0.112 support ([#3266](https://github.com/atuinsh/atuin/issues/3266))
+
+
+### Features
+
+- Call atuin setup from install script ([#3265](https://github.com/atuinsh/atuin/issues/3265))
+- Allow headless account ops against Hub server ([#3280](https://github.com/atuinsh/atuin/issues/3280))
+- Add custom filtering and scoring mechanisms
+
+
+### Miscellaneous Tasks
+
+- *(ci)* Migrate to depot runners ([#3279](https://github.com/atuinsh/atuin/issues/3279))
+- *(ci)* Use depot to build docker images too ([#3281](https://github.com/atuinsh/atuin/issues/3281))
+- Update changelog
+- Update permissions in Docker workflow ([#3283](https://github.com/atuinsh/atuin/issues/3283))
+- Change CHANGELOG format to be easier to parse
+- Symlink changelog so dist can pick it up
+- Vendor nucleo-ext + fork, so we can depend on our changes properly ([#3284](https://github.com/atuinsh/atuin/issues/3284))
+
+
+## 18.13.2
+
+### Miscellaneous Tasks
+
+- *(release)* Building windows aarch64 was overly optimistic
+- Update changelog
+
+
+## 18.13.1
+
+### Miscellaneous Tasks
+
+- *(release)* Update dist, remove custom runners
+- Update changelog
+
+
+## 18.13.0
+
+### Bug Fixes
+
 - *(deps)* Add use-dev-tty to crossterm in atuin-ai ([#3185](https://github.com/atuinsh/atuin/issues/3185))
 - *(docs)* Update Postgres volume path in Docker as required by pg18 ([#3174](https://github.com/atuinsh/atuin/issues/3174))
 - Systemd Exec for separate server binary ([#3176](https://github.com/atuinsh/atuin/issues/3176))
@@ -14,6 +55,9 @@ All notable changes to this project will be documented in this file.
 - Forward $PATH to tmux popup in zsh ([#3198](https://github.com/atuinsh/atuin/issues/3198))
 - Dramatically decrease daemon memory usage ([#3211](https://github.com/atuinsh/atuin/issues/3211))
 - Regen cargo dist
+- Clear script database before rebuild to prevent unique constraint violation ([#3232](https://github.com/atuinsh/atuin/issues/3232))
+- Support Nushell 0.111 ([#3249](https://github.com/atuinsh/atuin/issues/3249))
+- Ctrl-c not exiting ai ([#3256](https://github.com/atuinsh/atuin/issues/3256))
 
 
 ### Documentation
@@ -21,6 +65,7 @@ All notable changes to this project will be documented in this file.
 - Update config.md to remove NuShell support note ([#3190](https://github.com/atuinsh/atuin/issues/3190))
 - Document `search.filters` ([#3195](https://github.com/atuinsh/atuin/issues/3195))
 - Clean up doc references for sqlite-based self-hosting ([#3216](https://github.com/atuinsh/atuin/issues/3216))
+- Document daemon-fuzzy search mode ([#3254](https://github.com/atuinsh/atuin/issues/3254))
 
 
 ### Features
@@ -33,6 +78,14 @@ All notable changes to this project will be documented in this file.
 - Generate commands or ask questions with `atuin ai` ([#3199](https://github.com/atuinsh/atuin/issues/3199))
 - Add history author/intent metadata and v1 record version ([#3205](https://github.com/atuinsh/atuin/issues/3205))
 - In-memory search index with atuin daemon ([#3201](https://github.com/atuinsh/atuin/issues/3201))
+- Update script for smoother setup ([#3230](https://github.com/atuinsh/atuin/issues/3230))
+- Initial draft of atuin-shell ([#3206](https://github.com/atuinsh/atuin/issues/3206))
+- Allow setting multipliers for frequency, recency, and frecency scores ([#3235](https://github.com/atuinsh/atuin/issues/3235))
+- Allow running `atuin search -i` as subcommand ([#3208](https://github.com/atuinsh/atuin/issues/3208))
+- Use pty proxy for rendering tui popups without clearing the terminal ([#3234](https://github.com/atuinsh/atuin/issues/3234))
+- Allow authenticating with Atuin Hub ([#3237](https://github.com/atuinsh/atuin/issues/3237))
+- Initialize Atuin AI by default with `atuin init` ([#3255](https://github.com/atuinsh/atuin/issues/3255))
+- Add `atuin setup` ([#3257](https://github.com/atuinsh/atuin/issues/3257))
 
 
 ### Miscellaneous Tasks
@@ -42,9 +95,18 @@ All notable changes to this project will be documented in this file.
 - Update changelog
 - Use workspace versions ([#3210](https://github.com/atuinsh/atuin/issues/3210))
 - Move atuin ai subcommand into core binary ([#3212](https://github.com/atuinsh/atuin/issues/3212))
+- Update changelog
+- Update to Rust 1.94 ([#3247](https://github.com/atuinsh/atuin/issues/3247))
+- Strip symbols in dist profile to reduce binary size
+- Upgrade thiserror 1.x to 2.x to deduplicate dependency
+- Upgrade axum 0.7 to 0.8 to deduplicate with tonic's axum
+- Update changelog
+- Update changelog
+- Update changelog
+- Update changelog
 
 
-## [18.12.1] - 2026-02-11
+## 18.12.1
 
 ### Bug Fixes
 
@@ -64,7 +126,7 @@ All notable changes to this project will be documented in this file.
 - Update changelog
 
 
-## [18.12.0] - 2026-02-09
+## 18.12.0
 
 ### Bug Fixes
 
@@ -154,7 +216,7 @@ All notable changes to this project will be documented in this file.
 - Add alternative projects ([#3076](https://github.com/atuinsh/atuin/issues/3076))
 
 
-## [18.11.0] - 2026-01-12
+## 18.11.0
 
 ### Bug Fixes
 
@@ -205,7 +267,7 @@ All notable changes to this project will be documented in this file.
 - *(nix)* Update rust toolchain hash ([#2990](https://github.com/atuinsh/atuin/issues/2990))
 
 
-## [18.10.0] - 2025-10-21
+## 18.10.0
 
 ### Bug Fixes
 
@@ -227,7 +289,7 @@ All notable changes to this project will be documented in this file.
 - Update changelog
 
 
-## [18.9.0] - 2025-10-20
+## 18.9.0
 
 ### Bug Fixes
 
@@ -281,7 +343,7 @@ All notable changes to this project will be documented in this file.
 - Update flake.nix with new sha256
 
 
-## [18.8.0] - 2025-08-04
+## 18.8.0
 
 ### Bug Fixes
 
@@ -310,7 +372,7 @@ All notable changes to this project will be documented in this file.
 - Fix `get -i` deprecation ([#2829](https://github.com/atuinsh/atuin/issues/2829))
 
 
-## [18.7.1] - 2025-07-16
+## 18.7.1
 
 ### Bug Fixes
 
@@ -322,7 +384,7 @@ All notable changes to this project will be documented in this file.
 - Update changelog
 
 
-## [18.7.0] - 2025-07-16
+## 18.7.0
 
 ### Bug Fixes
 
@@ -346,7 +408,7 @@ All notable changes to this project will be documented in this file.
 - Allow setting script DB path ([#2750](https://github.com/atuinsh/atuin/issues/2750))
 
 
-## [18.6.1] - 2025-05-08
+## 18.6.1
 
 ### Bug Fixes
 
@@ -367,7 +429,7 @@ All notable changes to this project will be documented in this file.
 - Fix typos ([#2668](https://github.com/atuinsh/atuin/issues/2668))
 
 
-## [18.5.0] - 2025-04-09
+## 18.5.0
 
 ### Bug Fixes
 
@@ -446,7 +508,7 @@ All notable changes to this project will be documented in this file.
 - Update ([#2463](https://github.com/atuinsh/atuin/issues/2463))
 
 
-## [18.4.0] - 2024-12-27
+## 18.4.0
 
 ### Bug Fixes
 
@@ -578,7 +640,7 @@ All notable changes to this project will be documented in this file.
 - Update ([#2402](https://github.com/atuinsh/atuin/issues/2402))
 
 
-## [18.3.0] - 2024-06-10
+## 18.3.0
 
 ### Bug Fixes
 
@@ -666,7 +728,7 @@ All notable changes to this project will be documented in this file.
 - Preview_auto to use enum and different option ([#1991](https://github.com/atuinsh/atuin/issues/1991))
 
 
-## [18.2.0] - 2024-04-15
+## 18.2.0
 
 ### Bug Fixes
 
@@ -721,7 +783,7 @@ All notable changes to this project will be documented in this file.
 - *(dotfiles)* Cache aliases and read straight from file ([#1918](https://github.com/atuinsh/atuin/issues/1918))
 
 
-## [18.1.0] - 2024-03-11
+## 18.1.0
 
 ### Bug Fixes
 
@@ -805,14 +867,14 @@ All notable changes to this project will be documented in this file.
 - Rename atuin-config to atuin-dotfiles ([#1817](https://github.com/atuinsh/atuin/issues/1817))
 
 
-## [18.0.1] - 2024-02-12
+## 18.0.1
 
 ### Bug Fixes
 
 - Reorder the exit of enhanced keyboard mode ([#1694](https://github.com/atuinsh/atuin/issues/1694))
 
 
-## [18.0.0] - 2024-02-09
+## 18.0.0
 
 ### Bug Fixes
 
@@ -943,14 +1005,14 @@ All notable changes to this project will be documented in this file.
 - Misc improvements ([#1613](https://github.com/atuinsh/atuin/issues/1613))
 
 
-## [17.2.1] - 2024-01-03
+## 17.2.1
 
 ### Bug Fixes
 
 - *(server)* Typo with default config ([#1493](https://github.com/atuinsh/atuin/issues/1493))
 
 
-## [17.2.0] - 2024-01-03
+## 17.2.0
 
 ### Bug Fixes
 
@@ -1007,7 +1069,7 @@ All notable changes to this project will be documented in this file.
 - *(bash)* Refactor and optimize `__atuin_accept_line` ([#1482](https://github.com/atuinsh/atuin/issues/1482))
 
 
-## [17.1.0] - 2023-12-10
+## 17.1.0
 
 ### Bug Fixes
 
@@ -1051,7 +1113,7 @@ All notable changes to this project will be documented in this file.
 - Setup git cliff ([#1431](https://github.com/atuinsh/atuin/issues/1431))
 
 
-## [17.0.1] - 2023-10-28
+## 17.0.1
 
 ### Bug Fixes
 
@@ -1060,7 +1122,7 @@ All notable changes to this project will be documented in this file.
 - *(fish)* Improve output for `enter_accept` ([#1341](https://github.com/atuinsh/atuin/issues/1341))
 
 
-## [17.0.0] - 2023-10-26
+## 17.0.0
 
 ### Bug Fixes
 
@@ -1094,7 +1156,7 @@ All notable changes to this project will be documented in this file.
 - Invert mode detailed options ([#1225](https://github.com/atuinsh/atuin/issues/1225))
 
 
-## [16.0.0] - 2023-08-07
+## 16.0.0
 
 ### Bug Fixes
 
@@ -1116,7 +1178,7 @@ All notable changes to this project will be documented in this file.
 - Fix filtering aggregates ([#1114](https://github.com/atuinsh/atuin/issues/1114))
 
 
-## [15.0.0] - 2023-05-28
+## 15.0.0
 
 ### Documentation
 
@@ -1140,7 +1202,7 @@ All notable changes to this project will be documented in this file.
 - Much like history_filter, only it applies to cwd ([#904](https://github.com/atuinsh/atuin/issues/904))
 
 
-## [14.0.0] - 2023-04-01
+## 14.0.0
 
 ### Bug Fixes
 
@@ -1176,7 +1238,7 @@ All notable changes to this project will be documented in this file.
 - Add flake-compat ([#743](https://github.com/atuinsh/atuin/issues/743))
 
 
-## [13.0.0] - 2023-02-26
+## 13.0.0
 
 ### Documentation
 
@@ -1200,35 +1262,35 @@ All notable changes to this project will be documented in this file.
 - Fallback to using cargo ([#639](https://github.com/atuinsh/atuin/issues/639))
 
 
-## [12.0.0] - 2022-11-06
+## 12.0.0
 
 ### Documentation
 
 - Add more details about date parsing in the stats command ([#579](https://github.com/atuinsh/atuin/issues/579))
 
 
-## [0.10.0] - 2022-06-06
+## 0.10.0
 
 ### Miscellaneous Tasks
 
 - Allow specifiying the limited of returned entries ([#364](https://github.com/atuinsh/atuin/issues/364))
 
 
-## [0.9.0] - 2022-04-23
+## 0.9.0
 
 ### README
 
 - Add MacPorts installation instructions ([#302](https://github.com/atuinsh/atuin/issues/302))
 
 
-## [0.8.1] - 2022-04-12
+## 0.8.1
 
 ### Bug Fixes
 
 - Get install.sh working on UbuntuWSL ([#260](https://github.com/atuinsh/atuin/issues/260))
 
 
-## [0.8.0] - 2021-12-17
+## 0.8.0
 
 ### Bug Fixes
 
@@ -1240,7 +1302,7 @@ All notable changes to this project will be documented in this file.
 - Login/register no longer blocking ([#216](https://github.com/atuinsh/atuin/issues/216))
 
 
-## [0.7.2] - 2021-12-08
+## 0.7.2
 
 ### Bug Fixes
 
@@ -1260,14 +1322,14 @@ All notable changes to this project will be documented in this file.
 - Improve build times ([#213](https://github.com/atuinsh/atuin/issues/213))
 
 
-## [0.7.1] - 2021-05-10
+## 0.7.1
 
 ### Features
 
 - Build individual crates ([#109](https://github.com/atuinsh/atuin/issues/109))
 
 
-## [0.6.3] - 2021-04-26
+## 0.6.3
 
 ### Bug Fixes
 
