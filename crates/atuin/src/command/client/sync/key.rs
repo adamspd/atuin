@@ -362,7 +362,7 @@ async fn force_push_to_remote(settings: &Settings, store: &SqliteStore) -> Resul
 
     let client = Client::new(
         &settings.sync_address,
-        settings.session_token().await?.as_str(),
+        settings.sync_auth_token().await?,
         settings.network_connect_timeout,
         settings.network_timeout * 10,
     )
